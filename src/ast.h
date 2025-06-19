@@ -17,6 +17,8 @@ typedef struct {
 	int issigned;
 } ast_type_info_t;
 
+static ast_type_info_t* i32 = &(ast_type_info_t){.size = 4, .type = type_int, .issigned = 0};
+
 typedef struct ast ast_t;
 struct ast {
 	ast_type_info_t* type;

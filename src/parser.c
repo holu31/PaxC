@@ -1,4 +1,5 @@
 #include <parser.h>
+#include <ast.h>
 #include <stdlib.h>
 
 typedef struct {
@@ -6,7 +7,28 @@ typedef struct {
 	size_t pos;
 } parser_t;
 
-typedef token_t* (*parse_tok_t)();
+typedef enum {
+	RULE_TERMINAL,
+	RULE_CHOICE,
+	RULE_SEQUENCE,
+	RULE_OPTIONAL,
+	RULE_FUNC,
+} rule_type_t;
+
+typedef ast_t* (*parse_ast_func)(parser_t*);
+
+typedef struct rule_t {
+	rule_type_t type;
+	union {
+		token_t token;
+		parse_ast_func func;
+		struct rule_t* subrule;
+		struct {
+			struct rule_t** rules;
+			size_t count;
+		};
+	};	
+} rule_t;
 
 token_info_t* parser_peek(parser_t* par) {
 	lexer_t* lex = par->lex;
@@ -21,94 +43,201 @@ token_info_t* parser_next(parser_t* par) {
 	return parser_peek(par);
 }
 
-token_info_t* parse_tokens(parser_t* par, parse_tok_t tok[], size_t tok_len) {
-	size_t pos = par->pos;
-	lexer_t* lex = par->lex;
-
-	size_t tok_pos = 0;
-	while (pos < lex->tokens_count) {
-		token_info_t t = lex->tokens[pos];
-
-		if (tok_pos >= tok_len) break;
-		token_t* lex_tok = tok[tok_pos]();
-		int found = 0;
-		for (; lex_tok; lex_tok++) {
-			if (t.type == *lex_tok) {
-				found = 1;
-				break;	
-			}
-		}
-		if (!found) return NULL;
-
-		tok_pos++;
-		pos++;
-	}
-
-	size_t length = pos - par->pos;
-	token_info_t* arr = malloc(length * sizeof(*arr));
-	if (arr == NULL) return NULL;
-	for (size_t i = par->pos; i < pos; i++) {
-		size_t idx = i - par->pos;
-		arr[idx] = lex->tokens[i];
-	}
-	par->pos = pos + 1;
-
-	return arr;
+rule_t* rule_terminal(token_t token) {
+	rule_t* r = malloc(sizeof(rule_t));
+	r->type = RULE_TERMINAL;
+	r->token = token;
+	return r;
 }
 
-token_t* p_arg() {
-	static token_t tokens[] = {tok_number};
-	return tokens;
-}	
+rule_t* rule_choice(rule_t** rules, size_t count) {
+    rule_t* r = malloc(sizeof(rule_t));
+    r->type = RULE_CHOICE;
+    r->rules = rules;
+    r->count = count;
+    return r;
+}
 
-token_t* p_operator() {
-	static token_t tokens[] = {tok_plus, tok_minus};
-	return tokens;
+rule_t* rule_sequence(rule_t** rules, size_t count) {
+	rule_t* r = malloc(sizeof(rule_t));
+	r->type = RULE_SEQUENCE;
+	r->rules = rules;
+	r->count = count;
+	return r;
+}
+
+rule_t* rule_optional(rule_t* subrule) {
+    rule_t* r = malloc(sizeof(rule_t));
+    r->type = RULE_OPTIONAL;
+    r->subrule = subrule;
+    return r;
+}
+
+rule_t* rule_func(parse_ast_func func) {
+	rule_t* r = malloc(sizeof(rule_t));
+	r->type = RULE_FUNC;
+	r->func = func;
+	return r;
+}
+
+token_info_t* parse_rule(parser_t* par, rule_t* rule) {
+	switch(rule->type) {
+		case RULE_TERMINAL: {
+			token_info_t* tok = parser_peek(par);
+			if (tok && tok->type == rule->token) {
+				parser_next(par);
+				return tok;
+			}
+			return NULL;
+		}
+		case RULE_CHOICE: {
+			size_t start_pos = par->pos;
+			token_info_t* ret = NULL;
+			for (size_t i = 0; i < rule->count; i++) {
+				ret = parse_rule(par, rule->rules[i]);
+				if (!ret) {
+					par->pos = start_pos;
+				} else break;
+			}
+			return ret;
+		}
+		case RULE_SEQUENCE: {
+			size_t start_pos = par->pos;
+			token_info_t* last = NULL;	
+			for (size_t i = 0; i < rule->count; i++) {
+				last = parse_rule(par, rule->rules[i]);
+				if (!last) {
+					par->pos = start_pos;
+					return NULL;
+				}
+			}
+			return last;
+		}
+		case RULE_OPTIONAL: {
+			size_t start_pos = par->pos;
+			token_info_t* result = parse_rule(par, rule->subrule);
+			if (!result) par->pos = start_pos;
+			return result;
+		}
+		default:
+			return NULL;
+	}
+}
+
+ast_t* parse_rule_ast(parser_t* par, rule_t* rule) {
+	switch (rule->type) {
+		case RULE_FUNC: {
+			return rule->func(par);
+		}
+		case RULE_CHOICE: {
+			size_t start_pos = par->pos;
+			for (size_t i = 0; i < rule->count; i++) {
+				ast_t* result = parse_rule_ast(par, rule->rules[i]);
+				if (result) return result;
+				par->pos = start_pos;
+			}
+			return NULL;
+		}
+		default:
+			return NULL;
+	}
+}
+
+void free_rule(rule_t* rule) {
+	if (!rule) return;
+	switch (rule->type) {
+		case RULE_CHOICE:
+		case RULE_SEQUENCE:
+			for (size_t i = 0; i < rule->count; i++) {
+				free_rule(rule->rules[i]);
+			}
+			free(rule->rules);
+			break;
+		case RULE_OPTIONAL:
+			free_rule(rule->subrule);
+			break;
+		default: break;
+	}
+	free(rule);
+}
+
+rule_t* rule_operator() {
+	rule_t* plus = rule_terminal(tok_plus);
+	rule_t* minus = rule_terminal(tok_minus);
+
+	rule_t* operators[] = {plus, minus};
+	return rule_choice(operators, 2);
+}
+
+rule_t* rule_term() {
+	rule_t* number = rule_terminal(tok_number);
+
+	rule_t* types[] = {number};
+	return rule_choice(types, 1);
+}
+
+rule_t* rule_arg() {
+	rule_t* term = rule_term();
+
+	rule_t* types[] = {term};
+	return rule_choice(types, 1);
+}
+
+ast_t* parse_expr(parser_t* par);
+ast_t* parse_binop(parser_t* par);
+
+ast_t* parse_term(parser_t* par) {
+	rule_t* term = rule_term();	
+	token_info_t* t = parse_rule(par, term);
+	free_rule(term);
+	if (!t) return NULL;
+
+	if (t->type == tok_number) {
+		ast_t* ast = malloc(sizeof(ast_t));
+		if (!ast) return NULL;
+
+		ast->type = i32;
+		ast->i64 = atol(t->lexeme);	
+		return ast;
+	}
+	return NULL;
+}
+
+ast_t* parse_binop(parser_t* par) {
+	rule_t* rule = rule_func(parse_expr);
+	ast_t* left = parse_rule_ast(par, rule);
+	free_rule(rule);
+	if (!left) return NULL;
+
+	rule = rule_operator();
+	token_info_t* op = parse_rule(par, rule);
+	free_rule(rule);
+
+	rule = rule_func(parse_expr);
+	ast_t* right = parse_rule_ast(par, rule);
+	free_rule(rule);
+
+	if (!op|| !right) {
+		free(left);
+		return NULL;
+	}
+
+	ast_t* binop = malloc(sizeof(ast_t));
+	if (!binop) return NULL;
+	binop->type = i32;
+	binop->left = left;
+	binop->right = right;
+
+	return binop;
 }
 
 ast_t* parse_expr(parser_t* par) {
-	token_info_t* t = parser_peek(par);
-	if (!t) return NULL;
-	
-	ast_t* ast = malloc(sizeof(ast_t));
-	if (!ast) return NULL;
+	rule_t* num_func = rule_func(parse_term);
+	rule_t* binop_func = rule_func(parse_binop);
+	rule_t* choices[] = {binop_func, num_func};
+	rule_t* choice_rule = rule_choice(choices, 2);
 
-	if (t->type == tok_number) {
-		ast_type_info_t* type = malloc(sizeof(ast_type_info_t));
-		if (!type) {
-			free(ast);
-			return NULL;
-		}
-		type->type = type_int;
-		type->size = 4;
-		type->issigned = 0;
-
-		ast->type = type;
-		ast->i64 = atol(t->lexeme);;
-		parser_next(par);
-	}
-
-	return ast;
-}
-
-// TEST
-ast_t* parse_binop(parser_t* par) {
-	ast_t* ast = malloc(sizeof(ast_t));
-	if (!ast) return NULL;
-
-	parse_tok_t tok[] = {p_arg, p_operator, p_arg};
-	size_t tok_len = sizeof(tok) / sizeof(tok[0]);
-	token_info_t* info = parse_tokens(par, tok, tok_len);
-	if (!info) {
-		free(ast);
-		return NULL;
-	}	
-
-	ast->left = parse_expr(par);
-	ast->right = parse_expr(par);
-
-	free(info);
-	return ast;
+	return parse_rule_ast(par, choice_rule);
 }
 
 ast_t* parse_lex(lexer_t* lex) {
@@ -116,7 +245,7 @@ ast_t* parse_lex(lexer_t* lex) {
 	par.lex = lex;
 	par.pos = 0;
 
-	ast_t* ast = parse_binop(&par);
+	ast_t* ast = parse_expr(&par);
 
 	return ast;
 }
