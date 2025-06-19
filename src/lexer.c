@@ -166,14 +166,21 @@ lexer_t* lex_file(char* path) {
 	FILE* fptr;
 	if ((fptr = fopen(path, "r")) == NULL) {
 		printf("faild to open file '%s'\n", path);
+		free(lex);
 		return NULL;
 	}
 
 	fseek(fptr, 0, SEEK_END); 
 	size_t size = ftell(fptr);
 	fseek(fptr, 0, SEEK_SET); 
-	
-	lexer_file_t* file = malloc(size);
+
+	if (size == 0) {
+		fclose(fptr);
+		free(lex);
+		return NULL;
+	}
+
+	lexer_file_t* file = malloc(sizeof(lexer_file_t));
 	file->name = path;
 	file->src = malloc(size);
 	file->size = size;

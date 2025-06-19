@@ -51,11 +51,14 @@ rule_t* rule_terminal(token_t token) {
 }
 
 rule_t* rule_choice(rule_t** rules, size_t count) {
-    rule_t* r = malloc(sizeof(rule_t));
-    r->type = RULE_CHOICE;
-    r->rules = rules;
-    r->count = count;
-    return r;
+	rule_t* r = malloc(sizeof(rule_t));
+	r->type = RULE_CHOICE;
+	r->rules = malloc(count * sizeof(rule_t*));
+	for (size_t i = 0; i < count; ++i) {
+		r->rules[i] = rules[i];
+	}
+	r->count = count;
+	return r;
 }
 
 rule_t* rule_sequence(rule_t** rules, size_t count) {
@@ -143,24 +146,6 @@ ast_t* parse_rule_ast(parser_t* par, rule_t* rule) {
 	}
 }
 
-void free_rule(rule_t* rule) {
-	if (!rule) return;
-	switch (rule->type) {
-		case RULE_CHOICE:
-		case RULE_SEQUENCE:
-			for (size_t i = 0; i < rule->count; i++) {
-				free_rule(rule->rules[i]);
-			}
-			free(rule->rules);
-			break;
-		case RULE_OPTIONAL:
-			free_rule(rule->subrule);
-			break;
-		default: break;
-	}
-	free(rule);
-}
-
 rule_t* rule_operator() {
 	rule_t* plus = rule_terminal(tok_plus);
 	rule_t* minus = rule_terminal(tok_minus);
@@ -189,44 +174,43 @@ ast_t* parse_binop(parser_t* par);
 ast_t* parse_term(parser_t* par) {
 	rule_t* term = rule_term();	
 	token_info_t* t = parse_rule(par, term);
-	free_rule(term);
 	if (!t) return NULL;
 
 	if (t->type == tok_number) {
-		ast_t* ast = malloc(sizeof(ast_t));
-		if (!ast) return NULL;
+		ast_t* node = malloc(sizeof(ast_t));
+		if (!node) return NULL;
 
-		ast->type = i32;
-		ast->i64 = atol(t->lexeme);	
-		return ast;
+		node->node_type = AST_LITERAL;
+		node->type = i32;
+		node->literal.value = atol(t->lexeme);	
+		return node;
 	}
 	return NULL;
 }
 
 ast_t* parse_binop(parser_t* par) {
-	rule_t* rule = rule_func(parse_expr);
-	ast_t* left = parse_rule_ast(par, rule);
-	free_rule(rule);
+	ast_t* left = parse_term(par);
 	if (!left) return NULL;
 
-	rule = rule_operator();
+	rule_t* rule = rule_operator();
 	token_info_t* op = parse_rule(par, rule);
-	free_rule(rule);
 
-	rule = rule_func(parse_expr);
-	ast_t* right = parse_rule_ast(par, rule);
-	free_rule(rule);
-
-	if (!op|| !right) {
+	if (!op) {
 		free(left);
 		return NULL;
 	}
+	
+	rule = rule_func(parse_expr);
+	ast_t* right = parse_rule_ast(par, rule);
+	if (!right) return NULL;
 
 	ast_t* binop = malloc(sizeof(ast_t));
 	if (!binop) return NULL;
+	binop->node_type = AST_BINARY_OP;
 	binop->type = i32;
-	binop->left = left;
-	binop->right = right;
+	binop->binary.left = left;
+	binop->binary.right = right;
+	binop->binary.op = op->type;
 
 	return binop;
 }
