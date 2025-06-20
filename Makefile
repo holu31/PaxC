@@ -1,9 +1,10 @@
 CC := clang
 LLVM-LIBS := core executionengine native
-LLVM-CONFIG := $(llvm-config-18 --cflags --ldflags --libs $(LLVM-LIBS))
+LLVM-CFLAGS := $(shell llvm-config-18 --cflags)
+LLVM-LDFLAGS := $(shell llvm-config-18 --ldflags --libs $(LLVM-LIBS))
 
-CFLAGS := -O0 -g -Isrc/ $(LLVM-CONFIG) -Wall -Wextra
-LDFLAGS := 
+CFLAGS := -O0 -g -Isrc/ $(LLVM-CFLAGS) -Wall -Wextra
+LDFLAGS := $(LLVM-LDFLAGS)
 
 override SRCFILES := $(shell find -L * -type f | LC_ALL=C sort)
 override CFILES := $(filter %.c,$(SRCFILES))

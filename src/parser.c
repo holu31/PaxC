@@ -1,5 +1,6 @@
 #include <parser.h>
 #include <ast.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 typedef struct {
@@ -169,59 +170,90 @@ rule_t* rule_arg() {
 }
 
 ast_t* parse_expr(parser_t* par);
-ast_t* parse_binop(parser_t* par);
+ast_t* parse_primary(parser_t* par);
+ast_t* parse_unary(parser_t* par);
 
-ast_t* parse_term(parser_t* par) {
-	rule_t* term = rule_term();	
-	token_info_t* t = parse_rule(par, term);
-	if (!t) return NULL;
+int get_precedence(token_t tok) {
+	switch (tok) {
+		case tok_star:
+		case tok_slash:
+			return 2;
+		case tok_plus:
+		case tok_minus:
+			return 1;
+		default:
+			return -1;
+	}
+}
 
-	if (t->type == tok_number) {
-		ast_t* node = malloc(sizeof(ast_t));
-		if (!node) return NULL;
+ast_t* parse_expr_prec(parser_t* par, int min_prec) {
+	ast_t* left = parse_unary(par);
+	if (!left) return NULL;
 
-		node->node_type = AST_LITERAL;
-		node->type = i32;
-		node->literal.value = atol(t->lexeme);	
-		return node;
+	while (1) {
+		token_info_t* tok = parser_peek(par);
+		if (!tok) break;
+
+		int prec = get_precedence(tok->type);
+		if (prec < min_prec) break;
+
+		token_t op = tok->type;
+		parser_next(par);
+
+		ast_t* right = parse_expr_prec(par, prec + 1);
+		if (!right) {
+			ast_free(left);
+			return NULL;
+		}
+
+		left = ast_make_binary(left, right, op, i32);
+	}
+
+	return left;
+}
+
+ast_t* parse_expr(parser_t* par) {
+	return parse_expr_prec(par, 0);
+}
+
+ast_t* parse_primary(parser_t* par) {
+	token_info_t* tok = parser_peek(par);
+
+	if (tok && tok->type == tok_number) {
+		parser_next(par);
+		int64_t val = atol(tok->lexeme);
+		return ast_make_literal(val, i32);
+	}
+
+	if (tok && tok->type == tok_lparen) {
+		parser_next(par);
+		ast_t* inner = parse_expr(par);
+		tok = parser_peek(par);
+		if (!tok || tok->type != tok_rparen) {
+			fprintf(stderr, "%zu:%zu: maybe you missed ')'?\n",
+					tok->meta.line, tok->meta.end);
+			ast_free(inner);
+			return NULL;
+		}
+		parser_next(par);
+		return inner;
 	}
 	return NULL;
 }
 
-ast_t* parse_binop(parser_t* par) {
-	ast_t* left = parse_term(par);
-	if (!left) return NULL;
+ast_t* parse_unary(parser_t* par) {
+	token_info_t* tok = parser_peek(par);
+	if (!tok) return NULL;
 
-	rule_t* rule = rule_operator();
-	token_info_t* op = parse_rule(par, rule);
-
-	if (!op) {
-		free(left);
-		return NULL;
+	if (tok->type == tok_plus || tok->type == tok_minus) {
+		token_t op = tok->type;
+		parser_next(par);
+		ast_t* operand = parse_unary(par);
+		if (!operand) return NULL;
+		return ast_make_unary(operand, op, i32);
 	}
-	
-	rule = rule_func(parse_expr);
-	ast_t* right = parse_rule_ast(par, rule);
-	if (!right) return NULL;
 
-	ast_t* binop = malloc(sizeof(ast_t));
-	if (!binop) return NULL;
-	binop->node_type = AST_BINARY_OP;
-	binop->type = i32;
-	binop->binary.left = left;
-	binop->binary.right = right;
-	binop->binary.op = op->type;
-
-	return binop;
-}
-
-ast_t* parse_expr(parser_t* par) {
-	rule_t* num_func = rule_func(parse_term);
-	rule_t* binop_func = rule_func(parse_binop);
-	rule_t* choices[] = {binop_func, num_func};
-	rule_t* choice_rule = rule_choice(choices, 2);
-
-	return parse_rule_ast(par, choice_rule);
+	return parse_primary(par);
 }
 
 ast_t* parse_lex(lexer_t* lex) {

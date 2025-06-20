@@ -142,8 +142,10 @@ void lexify(lexer_t* lex) {
 			switch (op[0]) {
 				case '+': t = tok_plus; break;
 				case '-': t = tok_minus; break;
+				case '*': t = tok_star; break;
+				case '/': t = tok_slash; break;
 				case '(': t = tok_lparen; break;
-				case ')': t = tok_rparen; break;
+				case ')': t = tok_rparen; break;	
 			}
 			lex_token(lex, t, op);
 

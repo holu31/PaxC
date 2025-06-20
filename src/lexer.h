@@ -10,6 +10,8 @@ typedef enum {
 	tok_number,
 	tok_plus,
 	tok_minus,
+	tok_star,
+	tok_slash,
 	tok_lparen,
 	tok_rparen,
 	tok_if,
